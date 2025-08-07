@@ -1,27 +1,27 @@
 {
   "name": "pandahoho-ai-search",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Pandahoho AI Search Service",
+  "main": "index.mjs",
+  "type": "module",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node index.mjs"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Neozhou168/pandahoho-ai-search.git"
+    "url": "https://github.com/Neozhou168/pandahoho-ai-search.git"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "type": "commonjs",
   "bugs": {
     "url": "https://github.com/Neozhou168/pandahoho-ai-search/issues"
   },
   "homepage": "https://github.com/Neozhou168/pandahoho-ai-search#readme",
   "dependencies": {
-    "axios": "^1.11.0",
-    "dotenv": "^17.2.1",
-    "express": "^5.1.0",
+    "axios": "^1.1.0",
+    "dotenv": "^16.4.1",
+    "express": "^4.19.2",
     "openai": "^5.12.0"
   }
 }
