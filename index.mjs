@@ -1,8 +1,8 @@
 import express from 'express';
-import fetchBase44Data from './fetchData.mjs';
+import { fetchBase44Data } from './fetchData.mjs';
 import { embedTexts, getEmbedding } from './embed.mjs';
 import { upsertToQdrant } from './qdrant.mjs';
-import searchAnswer from './search.mjs';
+import { searchAnswer } from './search.mjs';
 import { randomUUID } from 'crypto';
 
 const app = express();
