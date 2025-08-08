@@ -1,21 +1,21 @@
 import express from 'express';
-import { fetchBase44Data } from './fetchData.mjs';
-import { embedTexts, getEmbedding } from './embed.mjs';
-import { upsertToQdrant } from './qdrant.mjs';
-import { searchAnswer } from './search.mjs';
+import fetchBase44Data from './fetchData.mjs';
+import { embedTexts } from './embed.mjs';
+import { upsertToQdrant, searchAnswer } from './qdrant.mjs';
 import { randomUUID } from 'crypto';
 
 const app = express();
 app.use(express.json());
 
+// ====== 1. 启动时同步数据到 Qdrant ======
 const run = async () => {
-  console.log('⚙️ Starting Pandahoho AI Search sync...');
+  console.log('🚀 Starting Pandahoho AI Search sync...');
 
-  // 1. 读取数据
+  // 1. 获取数据
   const allData = await fetchBase44Data();
   console.log(`📦 加载数据条数: ${allData.length}`);
 
-  // 2. 准备用于 embedding 的文本 (title + description)
+  // 2. 准备 embedding 的文本（title + description）
   const texts = allData.map(item =>
     [item.title, item.description].filter(Boolean).join(' ')
   );
@@ -23,41 +23,44 @@ const run = async () => {
   // 3. 获取 embedding 向量
   const vectors = await embedTexts(texts);
 
-  // 4. 构建 Qdrant 数据点
+  // 4. 构建 Qdrant points 并上传
   const qdrantPoints = allData.map((item, i) => ({
-    id: randomUUID(), // 使用 UUID 作为向量 ID
+    id: randomUUID(),
     vector: vectors[i],
     payload: {
-      ...item,
-      original_id: item.id // 保留原始 ID
+      ...item
     }
-  })).filter(p => p.vector && p.vector.length > 0); // 排除无效向量
+  }));
 
-  // 5. 上传到 Qdrant
   await upsertToQdrant(qdrantPoints);
-  console.log('✅ 成功同步到 Qdrant!');
+  console.log('✅ 数据已同步到 Qdrant');
 };
 
-// === 新增：监听 POST 请求 ===
-app.post('/', async (req, res) => {
-  const { query } = req.body;
-  if (!query) {
-    return res.status(400).json({ error: 'Missing query in request body' });
-  }
-
+// ====== 2. 提供 Web API 搜索端点 ======
+app.post('/search', async (req, res) => {
   try {
-    console.log('📨 Received query from Discord:', query);
-    const result = await searchAnswer(query);
-    return res.json({ response: result });
+    const { query } = req.body;
+
+    if (!query) {
+      return res.status(400).json({ error: 'Missing query' });
+    }
+
+    console.log(`🔍 Received search query: "${query}"`);
+    const results = await searchAnswer(query);
+
+    res.json({
+      query,
+      results
+    });
   } catch (error) {
-    console.error('❌ Error in / route:', error);
-    return res.status(500).json({ error: 'Internal server error' });
+    console.error('❌ Search error:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
   }
 });
 
-// 启动服务并执行初始化任务
-const PORT = process.env.PORT || 3000;
+// ====== 3. 启动服务器 ======
+const PORT = process.env.PORT || 8080;
 app.listen(PORT, async () => {
-  console.log(`🚀 Server running on http://localhost:${PORT}`);
-  await run(); // 启动后立即执行同步
+  console.log(`🌐 Server running on port ${PORT}`);
+  await run();
 });
