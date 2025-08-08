@@ -5,69 +5,80 @@ import { QdrantClient } from '@qdrant/js-client-rest';
 import OpenAI from 'openai';
 import { embedTexts } from './embed.mjs';
 
-dotenv.config();
-
-// 全局错误捕获
+// 全局异常捕获
 process.on('uncaughtException', (err) => {
-  console.error('🔥 未捕获的异常:', err);
+  console.error("💥 Uncaught Exception:", err);
 });
 process.on('unhandledRejection', (reason, promise) => {
-  console.error('🔥 未处理的 Promise 拒绝:', reason);
+  console.error("💥 Unhandled Rejection:", reason);
 });
+
+dotenv.config();
+
+console.log("🚀 Server starting, loading modules...");
 
 const app = express();
 app.use(bodyParser.json());
 
 const PORT = process.env.PORT || 3000;
 
-// Qdrant Client
+// 初始化 Qdrant
+console.log("🔌 Connecting to Qdrant:", process.env.QDRANT_URL);
 const qdrant = new QdrantClient({
   url: process.env.QDRANT_URL,
   apiKey: process.env.QDRANT_API_KEY
 });
 
-// OpenAI Client
+// 初始化 OpenAI
+console.log("🤖 Connecting to OpenAI...");
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
+// 超时工具
+function withTimeout(promise, ms, name = '操作') {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error(`⏱ ${name} 超时 ${ms}ms`)), ms))
+  ]);
+}
+
+// 搜索 API
 app.post('/search', async (req, res) => {
   const startTime = Date.now();
-  console.log('📥 收到 /search 请求');
+  console.log("📩 Received /search request:", req.body);
 
   try {
-    console.log('📝 请求 body:', req.body);
-    const query = req.body.query;
-    if (!query) {
-      console.warn('⚠️ 缺少 query 参数');
-      return res.status(400).json({ error: 'Missing query' });
-    }
+    const { query } = req.body;
+    console.log("🔍 Query received:", query);
 
-    console.log('🔍 Step 1: 生成 query embedding...');
-    const queryEmbedding = await embedTexts([query]);
-    console.log('✅ Step 1 完成:', queryEmbedding.length, '个向量');
+    // 生成 embedding
+    console.log("🧠 Generating embedding...");
+    const queryEmbedding = await withTimeout(embedTexts([query]), 15000, "生成 embedding");
+    console.log("✅ Embedding generated");
 
-    console.log('🔍 Step 2: 调用 Qdrant 搜索...');
-    const searchResult = await qdrant.search(process.env.QDRANT_COLLECTION, {
-      vector: queryEmbedding[0],
-      limit: 5
-    });
-    console.log('✅ Step 2 完成: 找到', searchResult.length, '条结果');
+    // 在 Qdrant 搜索
+    console.log("📡 Searching Qdrant...");
+    const searchResult = await withTimeout(
+      qdrant.search("pandahoho_collection", {
+        vector: queryEmbedding[0],
+        limit: 5
+      }),
+      15000,
+      "Qdrant 搜索"
+    );
+    console.log("✅ Qdrant search completed:", searchResult.length, "results");
 
     const elapsed = Date.now() - startTime;
-    console.log(`⏱ 总耗时: ${elapsed}ms`);
-
-    return res.json({
-      status: 'ok',
-      elapsed_ms: elapsed,
-      results: searchResult
-    });
+    console.log(`🎯 Search completed in ${elapsed}ms`);
+    res.json({ status: 'ok', elapsed_ms: elapsed, data: searchResult });
 
   } catch (err) {
     const elapsed = Date.now() - startTime;
-    console.error(`❌ 处理失败 (${elapsed}ms):`, err);
-    return res.status(500).json({
+    console.error(`❌ Error in /search after ${elapsed}ms:`, err);
+    res.status(500).json({
       status: 'error',
+      code: 500,
       message: err.message,
       elapsed_ms: elapsed
     });
@@ -75,5 +86,5 @@ app.post('/search', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`🚀 AI Search API 运行在 http://localhost:${PORT}`);
+  console.log(`🚀 AI Search API running at http://localhost:${PORT}`);
 });
