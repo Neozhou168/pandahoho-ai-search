@@ -19,6 +19,7 @@
   },
   "homepage": "https://github.com/Neozhou168/pandahoho-ai-search#readme",
   "dependencies": {
+    "@qdrant/js-client-rest": "^1.15.0",
     "axios": "^1.1.0",
     "dotenv": "^16.4.1",
     "express": "^4.19.2",
