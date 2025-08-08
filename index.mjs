@@ -1,5 +1,5 @@
 import express from 'express';
-import fetchBase44Data from './fetchData.mjs';
+import { fetchBase44Data } from './fetchData.mjs';
 import { embedTexts } from './embed.mjs';
 import { upsertToQdrant, searchAnswer } from './qdrant.mjs';
 import { randomUUID } from 'crypto';
