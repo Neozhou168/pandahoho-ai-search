@@ -3,6 +3,7 @@ import bodyParser from 'body-parser';
 import dotenv from 'dotenv';
 import { QdrantClient } from '@qdrant/js-client-rest';
 import OpenAI from 'openai';
+import { embedTexts } from './embed.mjs'; // 修正 import
 
 dotenv.config();
 
@@ -22,69 +23,58 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
-// 带超时的 Promise 封装
+// 带超时的 Promise
 function withTimeout(promise, ms, name = '操作') {
   return Promise.race([
     promise,
     new Promise((_, reject) =>
-      setTimeout(() => reject(new Error(`${name} 超时 (${ms}ms)`)), ms)
+      setTimeout(() => reject(new Error(`${name} 超时 (${ms} ms)`)), ms)
     )
   ]);
 }
 
-// /search 接口
+// 搜索接口
 app.post('/search', async (req, res) => {
-  const overallStart = Date.now();
-  console.log('---- 新请求 ----');
-  console.log('收到请求 body:', req.body);
+  const startTime = Date.now();
+  const { query } = req.body;
+
+  console.log(`📥 收到搜索请求: ${query}`);
 
   try {
-    const query = req.body?.query;
-    if (!query) {
-      console.warn('缺少 query 参数');
-      return res.status(400).json({ error: '缺少 query 参数' });
-    }
+    // 生成 embedding
+    const [vector] = await withTimeout(embedTexts([query]), 10000, '生成向量');
 
-    // 1. Embedding
-    console.log('[1] 开始生成向量...');
-    const embedStart = Date.now();
-    const queryVector = await embedText(query);
-    const embedTime = Date.now() - embedStart;
-    console.log(`[1] 向量生成完成: ${embedTime}ms`);
+    // Qdrant 搜索
+    const searchResult = await withTimeout(
+      qdrant.search(process.env.QDRANT_COLLECTION, {
+        vector,
+        limit: 5
+      }),
+      10000,
+      'Qdrant 搜索'
+    );
 
-    // 2. Qdrant 搜索
-    console.log('[2] 开始 Qdrant 搜索...');
-    const searchStart = Date.now();
-    const searchResult = await qdrant.search(process.env.QDRANT_COLLECTION, {
-      vector: queryVector,
-      limit: 5,
-      with_payload: true
-    });
-    const searchTime = Date.now() - searchStart;
-    console.log(`[2] Qdrant 搜索完成: ${searchTime}ms`);
-
-    // 3. 返回
-    const totalTime = Date.now() - overallStart;
-    console.log(`[完成] 总耗时: ${totalTime}ms`);
+    const elapsed = Date.now() - startTime;
+    console.log(`✅ 搜索完成，耗时 ${elapsed} ms`);
 
     res.json({
+      status: 'ok',
       query,
-      timing: { embedTime, searchTime, totalTime },
-      results: searchResult.map(item => ({
-        id: item.id,
-        score: item.score,
-        payload: item.payload
-      }))
+      results: searchResult,
+      elapsed_ms: elapsed
     });
-
   } catch (err) {
-    const totalTime = Date.now() - overallStart;
-    console.error(`[Error] 异常: ${err.message}, 总耗时: ${totalTime}ms`);
-    res.status(500).json({ error: err.message });
+    const elapsed = Date.now() - startTime;
+    console.error(`❌ 搜索失败 (${elapsed} ms):`, err.message);
+    res.status(500).json({
+      status: 'error',
+      code: 500,
+      message: err.message,
+      elapsed_ms: elapsed
+    });
   }
 });
 
-// 启动服务
 app.listen(PORT, () => {
-  console.log(`AI Search API 运行在 http://localhost:${PORT}`);
+  console.log(`🚀 AI Search API 运行在 http://localhost:${PORT}`);
 });
