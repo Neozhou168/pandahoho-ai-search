@@ -33,64 +33,67 @@ function withTimeout(promise, ms, name = '操作') {
 }
 
 // /search 接口
-app.post('/search', async (req, res) => {
+app.post("/search", async (req, res) => {
   const overallStart = Date.now();
-  let embedTime = 0, searchTime = 0;
+  const TIMEOUT_MS = 5000; // 总超时时间 5 秒
+
+  // 超时 Promise
+  const timeoutPromise = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error("Search request timed out")), TIMEOUT_MS)
+  );
 
   try {
-    const { query } = req.body;
-    if (!query) return res.status(400).json({ error: 'Missing query' });
+    const searchPromise = (async () => {
+      const { query } = req.body;
+      if (!query) {
+        return res.status(400).json({ error: "Missing 'query' field" });
+      }
 
-    console.log(`[Search] 收到查询: ${query}`);
+      // Step 1: 生成 embedding
+      const embedStart = Date.now();
+      const embedding = await openai.embeddings.create({
+        model: "text-embedding-3-small",
+        input: query,
+      });
+      const embedTime = Date.now() - embedStart;
 
-    // Embedding 阶段
-    console.log(`[Step] 开始生成 embedding`);
-    const embedStart = Date.now();
-    const embedding = await withTimeout(
-      openai.embeddings.create({
-        model: 'text-embedding-3-small',
-        input: query
-      }),
-      5000,
-      'OpenAI Embedding'
-    );
-    embedTime = Date.now() - embedStart;
-    console.log(`[Timing] Embedding 生成耗时: ${embedTime}ms`);
-
-    // Qdrant 阶段
-    console.log(`[Step] 开始 Qdrant 搜索`);
-    const searchStart = Date.now();
-    const searchResult = await withTimeout(
-      qdrant.search(process.env.QDRANT_COLLECTION, {
+      // Step 2: Qdrant 搜索
+      const searchStart = Date.now();
+      const searchResult = await qdrant.search(process.env.QDRANT_COLLECTION, {
         vector: embedding.data[0].embedding,
         limit: 5,
-        with_payload: true
-      }),
-      5000,
-      'Qdrant Search'
-    );
-    searchTime = Date.now() - searchStart;
-    console.log(`[Timing] Qdrant 搜索耗时: ${searchTime}ms`);
+        with_payload: true,
+        with_vector: false,
+      });
+      const searchTime = Date.now() - searchStart;
 
-    // 总耗时
-    const totalTime = Date.now() - overallStart;
-    console.log(`[Timing] 总耗时: ${totalTime}ms`);
+      const totalTime = Date.now() - overallStart;
 
-    res.json({
-      query,
-      timing: { embeddingMs: embedTime, qdrantSearchMs: searchTime, totalMs: totalTime },
-      results: searchResult.map(item => ({
-        id: item.id,
-        score: item.score,
-        payload: item.payload
-      }))
-    });
+      // Railway 日志
+      console.log(`[Timing] Embedding: ${embedTime}ms, Qdrant: ${searchTime}ms, 总耗时: ${totalTime}ms`);
+
+      return res.json({
+        query,
+        timing: {
+          embeddingMS: embedTime,
+          qdrantSearchMS: searchTime,
+          totalMS: totalTime,
+        },
+        results: searchResult.map((item) => ({
+          id: item.id,
+          score: item.score,
+          payload: item.payload,
+        })),
+      });
+    })();
+
+    // 等待 searchPromise 或 timeoutPromise 中先完成的
+    await Promise.race([searchPromise, timeoutPromise]);
 
   } catch (err) {
     const totalTime = Date.now() - overallStart;
-    console.error(`[Error] ${err.message}`);
-    console.log(`[Timing] Embedding: ${embedTime}ms, Qdrant: ${searchTime}ms, 总耗时: ${totalTime}ms`);
-    res.status(500).json({ error: err.message });
+    console.error(`[Error] 搜索失败: ${err.message}, 总耗时: ${totalTime}ms`);
+    res.status(500).json({ error: err.message, totalMS: totalTime });
   }
 });
 
