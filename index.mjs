@@ -44,40 +44,50 @@ function withTimeout(promise, ms, name = '操作') {
 }
 
 // 搜索 API
+// 搜索 API
 app.post('/search', async (req, res) => {
   const startTime = Date.now();
-  console.log("🟢 [1] 收到 /search 请求, body =", req.body);
+  console.log("💚 [1] 收到 /search 请求, body =", req.body);
 
   try {
     const { query } = req.body;
     if (!query) {
-      console.error("❌ [2] 缺少 query 参数");
-      return res.status(400).json({ error: "Missing query" });
+      console.error("❌ [2] 缺少 query 参数!");
+      return res.status(400).json({ error: 'Missing query' });
     }
-    console.log("✅ [2] query 参数 =", query);
+    console.log("💚 [2] query 参数 =", query);
 
     // Step 1: Embed query
-    console.log("🔵 [3] 开始生成 query embedding...");
+    console.log("💙 [3] 开始生成 query embedding...");
     const queryEmbedding = await getEmbedding(query);
-    console.log("✅ [3] query embedding 完成, 长度 =", queryEmbedding.length);
+    console.log(`💙 [3] query embedding 完成, 向量长度 = ${queryEmbedding.length}`);
 
     // Step 2: Qdrant 搜索
-    console.log("🔵 [4] 向 Qdrant 发送搜索请求...");
-    const searchResult = await qdrant.search("your_collection_name", {
+    console.log("💛 [4] Qdrant 发送搜索请求...");
+    const searchResult = await qdrant.search(process.env.QDRANT_COLLECTION, {
       vector: queryEmbedding,
       limit: 5,
     });
-    console.log("✅ [4] Qdrant 返回结果数量 =", searchResult.length);
+    console.log(`💛 [4] Qdrant 返回结果数量 = ${searchResult.length}`);
 
     // Step 3: 返回结果
     const elapsed = Date.now() - startTime;
-    console.log(`🏁 [5] 请求完成, 总耗时 ${elapsed} ms`);
-    res.json({ elapsed_ms: elapsed, results: searchResult });
+    console.log(`✅ [5] 搜索完成, 总耗时 ${elapsed}ms`);
+    res.json({
+      status: 'ok',
+      elapsed_ms: elapsed,
+      results: searchResult,
+    });
 
   } catch (err) {
     const elapsed = Date.now() - startTime;
-    console.error(`❌ [Error] 在第 ${elapsed} ms 报错:`, err);
-    res.status(500).json({ error: err.message, elapsed_ms: elapsed });
+    console.error(`❌ [X] 搜索失败 (${elapsed}ms):`, err);
+    res.status(500).json({
+      status: 'error',
+      code: 500,
+      message: err.message,
+      elapsed_ms: elapsed,
+    });
   }
 });
 
