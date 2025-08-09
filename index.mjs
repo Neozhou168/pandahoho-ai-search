@@ -21,28 +21,41 @@ console.log("🚀 Server starting, loading modules...");
 const app = express();
 app.use(express.json());
 
+// Add this middleware before your CORS middleware
+app.use((req, res, next) => {
+  console.log(`📥 ${req.method} ${req.url} from origin: ${req.get('origin')}`);
+  next();
+});
+
 // ==== CORS 配置：允许 pandahoho.com 和 base44.com 的所有子域名 ====
 const allowedOrigins = [
-  /\.?pandahoho\.com$/,
-  /\.?base44\.com$/
+  /https?:\/\/.*\.pandahoho\.com$/,
+  /https?:\/\/.*\.base44\.com$/,
+  /https?:\/\/pandahoho\.com$/,
+  /https?:\/\/base44\.com$/
 ];
 
 const corsOptions = {
   origin: (origin, callback) => {
-    if (!origin) return callback(null, true); // 允许本地或服务器直接访问
-    try {
-      const hostname = new URL(origin).hostname;
-      if (allowedOrigins.some(pattern => pattern.test(hostname))) {
-        callback(null, true);
-      } else {
-        callback(new Error(`CORS blocked for origin: ${origin}`));
-      }
-    } catch (err) {
-      callback(new Error(`Invalid origin: ${origin}`));
+    // Allow requests with no origin (mobile apps, Postman, etc.)
+    if (!origin) return callback(null, true);
+    
+    // Check if origin ends with allowed domains
+    const allowedDomains = ['pandahoho.com', 'base44.com'];
+    const isAllowed = allowedDomains.some(domain => 
+      origin.endsWith(domain) || origin.endsWith(`.${domain}`)
+    );
+    
+    if (isAllowed) {
+      callback(null, true);
+    } else {
+      console.log(`CORS blocked origin: ${origin}`);
+      callback(new Error(`CORS policy violation: ${origin} not allowed`));
     }
   },
   methods: ['GET', 'POST', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: false
 };
 
 app.use(cors(corsOptions));
