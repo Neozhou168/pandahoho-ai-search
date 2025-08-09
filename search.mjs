@@ -18,17 +18,20 @@ export async function searchAnswer(question) {
       score: 0,
       title: '未找到相关内容',
       type: '',
-      description: '请尝试换个问题或关键词。',
+      description: '请尝试换个问题或关键词',
       url: ''
     }];
   }
 
   // 4. 格式化输出
-  return results.map(res => ({
-    score: res.score.toFixed(3),
-    title: res.payload.title,
-    type: res.payload.type,
-    description: res.payload.description,
-    url: res.payload.url || '',
-  }));
+  return results.map(res => {
+    const item = res.payload || {};
+    return {
+      score: res.score?.toFixed(3) || '0.000',
+      title: item.title || '',
+      type: item.type || '', // 可能是 venues / curations / group-up / routes
+      description: item.description || '',
+      url: item.url || '',   // 确保每条记录都有可访问的完整链接
+    };
+  });
 }
