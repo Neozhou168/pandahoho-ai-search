@@ -1,9 +1,8 @@
 import express from 'express';
-import bodyParser from 'body-parser';
 import dotenv from 'dotenv';
 import { QdrantClient } from '@qdrant/js-client-rest';
 import OpenAI from 'openai';
-import { embedTexts } from './embed.mjs';
+import { embedTexts, getEmbedding } from './embed.mjs';
 
 // 全局异常捕获
 process.on('uncaughtException', (err) => {
@@ -18,7 +17,7 @@ dotenv.config();
 console.log("🚀 Server starting, loading modules...");
 
 const app = express();
-app.use(bodyParser.json());
+app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
 
