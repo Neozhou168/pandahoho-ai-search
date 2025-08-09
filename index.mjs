@@ -121,11 +121,28 @@ app.post('/search', async (req, res) => {
       process.env.QDRANT_COLLECTION,
       {
         vector: queryEmbedding,
-        limit: 5,
+        limit: 10, // 增加搜索数量，然后过滤
       }
     );
 
-    console.log(`✅ [4] Qdrant 返回结果数量 = ${searchResult.length}`);
+    console.log(`✅ [4] Qdrant 返回原始结果数量 = ${searchResult.length}`);
+
+    // 🔥 新增：过滤掉推广信息
+    const filteredResults = searchResult.filter(result => {
+      const payload = result.payload || {};
+      const description = payload.description || '';
+      
+      // 过滤掉包含推广文案的结果
+      const isPromotion = description.includes('Your guide to the great outdoors');
+      
+      if (isPromotion) {
+        console.log(`🚫 过滤掉推广信息: ${payload.title}`);
+      }
+      
+      return !isPromotion;
+    }).slice(0, 5); // 过滤后取前5个结果
+
+    console.log(`✅ [4.5] 过滤后结果数量 = ${filteredResults.length}`);
 
     // Step 3: 返回结果
     const elapsed = Date.now() - startTime;
@@ -133,7 +150,7 @@ app.post('/search', async (req, res) => {
     res.json({
       status: 'ok',
       elapsed_ms: elapsed,
-      results: searchResult,
+      results: filteredResults, // 返回过滤后的结果
     });
 
   } catch (err) {
