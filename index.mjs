@@ -1,4 +1,5 @@
 import express from 'express';
+import cors from 'cors';
 import dotenv from 'dotenv';
 import { QdrantClient } from '@qdrant/js-client-rest';
 import OpenAI from 'openai';
@@ -16,8 +17,33 @@ dotenv.config();
 
 console.log("🚀 Server starting, loading modules...");
 
+// 初始化 express 应用
 const app = express();
 app.use(express.json());
+
+// CORS 设置 — 允许来自 pandahoho.com 和 base44.com 的请求
+app.use(cors({
+  origin: [
+    'https://pandahoho.com',
+    'https://www.pandahoho.com',
+    'https://base44.com',
+    'https://www.base44.com'
+  ],
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
+
+// 处理 OPTIONS 预检请求
+app.options('*', cors({
+  origin: [
+    'https://pandahoho.com',
+    'https://www.pandahoho.com',
+    'https://base44.com',
+    'https://www.base44.com'
+  ],
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
 
 const PORT = process.env.PORT || 3000;
 
