@@ -21,29 +21,37 @@ console.log("🚀 Server starting, loading modules...");
 const app = express();
 app.use(express.json());
 
-// CORS 设置 — 允许来自 pandahoho.com 和 base44.com 的请求
-app.use(cors({
-  origin: [
-    'https://pandahoho.com',
-    'https://www.pandahoho.com',
-    'https://base44.com',
-    'https://www.base44.com'
-  ],
-  methods: ['GET', 'POST', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
-}));
+// ==== CORS 配置：允许 pandahoho.com 和 base44.com 的所有子域名 ====
+const allowedOrigins = [
+  /\.?pandahoho\.com$/,
+  /\.?base44\.com$/
+];
 
-// 处理 OPTIONS 预检请求
-app.options('*', cors({
-  origin: [
-    'https://pandahoho.com',
-    'https://www.pandahoho.com',
-    'https://base44.com',
-    'https://www.base44.com'
-  ],
+const corsOptions = {
+  origin: (origin, callback) => {
+    if (!origin) return callback(null, true); // 允许本地或服务器直接访问
+    try {
+      const hostname = new URL(origin).hostname;
+      if (allowedOrigins.some(pattern => pattern.test(hostname))) {
+        callback(null, true);
+      } else {
+        callback(new Error(`CORS blocked for origin: ${origin}`));
+      }
+    } catch (err) {
+      callback(new Error(`Invalid origin: ${origin}`));
+    }
+  },
   methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
-}));
+};
+
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
+
+// 健康检查路由
+app.get('/', (req, res) => {
+  res.send({ status: 'ok', message: 'Pandahoho AI Search API running' });
+});
 
 const PORT = process.env.PORT || 3000;
 
