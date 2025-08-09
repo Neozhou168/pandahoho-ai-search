@@ -41,7 +41,12 @@ const corsOptions = {
     if (!origin) return callback(null, true);
     
     // Check if origin ends with allowed domains
-    const allowedDomains = ['pandahoho.com', 'base44.com', 'base44.app'];
+    const allowedDomains = [
+      'pandahoho.com', 
+      'base44.com', 
+      'base44.app',
+      'panda-hoho-production.up.railway.app'
+    ];
     const isAllowed = allowedDomains.some(domain => 
       origin.endsWith(domain) || origin.endsWith(`.${domain}`)
     );
