@@ -26,6 +26,21 @@ function stringToUUID(str) {
     ].join("-");
 }
 
+// 清理文本中的问题字符
+function cleanText(text) {
+    if (typeof text !== 'string') {
+        text = String(text);
+    }
+    
+    // 移除有问题的转义字符和控制字符
+    return text
+        .replace(/\\x[0-9a-fA-F]{0,2}/g, '')  // 移除十六进制转义
+        .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, '')  // 移除控制字符
+        .replace(/\\/g, '\\\\')  // 确保反斜杠正确转义
+        .replace(/"/g, '\\"')    // 确保引号正确转义
+        .trim();
+}
+
 // 生成用于向量化的文本内容
 function generateTextForEmbedding(item, type) {
     let text = "";
@@ -34,57 +49,64 @@ function generateTextForEmbedding(item, type) {
     switch (type) {
         case "routes":
             text = [
-                item.title || "",
-                item.description || "",
-                item.city || "",
-                item.country || "",
+                cleanText(item.title || ""),
+                cleanText(item.description || ""),
+                cleanText(item.city || ""),
+                cleanText(item.country || ""),
                 // 添加其他相关字段
-                item.travel_mode || "",
-                item.duration || ""
+                cleanText(item.travel_mode || ""),
+                cleanText(item.duration || "")
             ].filter(Boolean).join(" ");
             break;
             
         case "venues":
             text = [
-                item.title || "",
-                item.description || "",
-                item.city || "",
-                item.country || "",
-                item.type || "",
+                cleanText(item.title || ""),
+                cleanText(item.description || ""),
+                cleanText(item.city || ""),
+                cleanText(item.country || ""),
+                cleanText(item.type || ""),
                 // 处理 audience 数组
-                Array.isArray(item.audience) ? item.audience.join(" ") : "",
+                Array.isArray(item.audience) ? item.audience.map(cleanText).join(" ") : "",
                 // 处理 highlights 数组
-                Array.isArray(item.highlights) ? item.highlights.join(" ") : ""
+                Array.isArray(item.highlights) ? item.highlights.map(cleanText).join(" ") : ""
             ].filter(Boolean).join(" ");
             break;
             
         case "curations":
             text = [
-                item.title || "",
-                item.description || "",
-                item.city || "",
-                item.country || "",
-                item.travel_type || "",
-                item.best_season || ""
+                cleanText(item.title || ""),
+                cleanText(item.description || ""),
+                cleanText(item.city || ""),
+                cleanText(item.country || ""),
+                cleanText(item.travel_type || ""),
+                cleanText(item.best_season || "")
             ].filter(Boolean).join(" ");
             break;
             
         case "group_ups":
             text = [
-                item.title || "",
-                item.description || "",
-                item.note || "",
-                item.creator_full_name || ""
+                cleanText(item.title || ""),
+                cleanText(item.description || ""),
+                cleanText(item.note || ""),
+                cleanText(item.creator_full_name || "")
             ].filter(Boolean).join(" ");
             break;
             
         default:
             // 通用处理：使用 title 和 description
-            text = `${item.title || ""} ${item.description || ""}`.trim();
+            text = `${cleanText(item.title || "")} ${cleanText(item.description || "")}`.trim();
     }
     
-    // 如果没有有效文本，使用 JSON 字符串作为后备
-    return text.trim() || JSON.stringify(item);
+    // 最终清理
+    text = cleanText(text);
+    
+    // 如果没有有效文本，使用清理后的基本信息
+    if (!text) {
+        text = cleanText(`${item.id || "unknown"} ${item.type || ""}`);
+    }
+    
+    return text;
 }
 
 // 读取并合并 JSON 中的所有数组字段
@@ -262,6 +284,12 @@ async function uploadData(points) {
             
             console.log(`📝 (${i + 1}/${data.length}) [${item.type}] 生成向量中...`);
             
+            // 验证文本内容
+            if (!textForEmbedding || textForEmbedding.length < 10) {
+                console.warn(`⚠️ 第 ${i + 1} 条记录文本过短，跳过`);
+                continue;
+            }
+            
             try {
                 const vector = await generateEmbedding(textForEmbedding);
 
@@ -270,11 +298,23 @@ async function uploadData(points) {
                     stringToUUID(`${item.type}-${item.id}`) : 
                     stringToUUID(`${item.type}-${i}-${Date.now()}`);
 
+                // 清理 payload 中的所有字符串字段
+                const cleanPayload = {};
+                for (const [key, value] of Object.entries(item)) {
+                    if (typeof value === 'string') {
+                        cleanPayload[key] = cleanText(value);
+                    } else if (Array.isArray(value)) {
+                        cleanPayload[key] = value.map(v => typeof v === 'string' ? cleanText(v) : v);
+                    } else {
+                        cleanPayload[key] = value;
+                    }
+                }
+
                 points.push({
                     id: uniqueId,
                     vector,
                     payload: {
-                        ...item,
+                        ...cleanPayload,
                         // 添加一些元数据
                         _text_for_embedding: textForEmbedding.substring(0, 500), // 保存用于调试
                         _created_at: new Date().toISOString()
@@ -282,7 +322,8 @@ async function uploadData(points) {
                 });
             } catch (error) {
                 console.error(`❌ 处理第 ${i + 1} 条记录时出错:`, error.message);
-                throw error;
+                // 不要因为单条记录失败就停止整个过程
+                continue;
             }
         }
 
