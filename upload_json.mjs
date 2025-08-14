@@ -1,4 +1,4 @@
-// upload_json.mjs - 超级安全版本
+// upload_json.mjs - 包含URL字段的完整版本
 import fs from "fs";
 import path from "path";
 import dotenv from "dotenv";
@@ -36,6 +36,18 @@ function cleanText(text) {
     return text
         .replace(/[^\x20-\x7E\u4e00-\u9fff]/g, ' ')  // 只保留基本ASCII和中文
         .replace(/\s+/g, ' ')  // 压缩空白字符
+        .trim();
+}
+
+// URL专用清理函数 - 保留URL中的特殊字符
+function cleanUrl(url) {
+    if (typeof url !== 'string') {
+        return '';
+    }
+    
+    // 对URL只做最小清理，保留URL必要的字符
+    return url
+        .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')  // 只移除控制字符
         .trim();
 }
 
@@ -283,7 +295,7 @@ async function uploadData(points) {
                     stringToUUID(`${item.type}-${item.id}`) : 
                     stringToUUID(`${item.type}-${i}-${Date.now()}`);
 
-                // 创建超级干净的payload
+                // 创建包含所有重要字段的payload
                 const cleanPayload = {
                     id: cleanText(item.id || ''),
                     title: cleanText(item.title || ''),
@@ -292,6 +304,40 @@ async function uploadData(points) {
                     country: cleanText(item.country || ''),
                     type: item.type
                 };
+
+                // 根据数据类型添加特定字段
+                switch (item.type) {
+                    case 'routes':
+                        if (item.travel_mode) cleanPayload.travel_mode = cleanText(item.travel_mode);
+                        if (item.duration) cleanPayload.duration = cleanText(item.duration);
+                        if (item.url) cleanPayload.url = cleanUrl(item.url);
+                        break;
+                    case 'venues':
+                        if (item.audience) cleanPayload.audience = Array.isArray(item.audience) ? item.audience.map(cleanText) : [];
+                        if (item.highlights) cleanPayload.highlights = Array.isArray(item.highlights) ? item.highlights.map(cleanText) : [];
+                        if (item.url) cleanPayload.url = cleanUrl(item.url);
+                        break;
+                    case 'curations':
+                        if (item.travel_type) cleanPayload.travel_type = cleanText(item.travel_type);
+                        if (item.best_season) cleanPayload.best_season = cleanText(item.best_season);
+                        if (item.url) cleanPayload.url = cleanUrl(item.url);
+                        if (item.cover_image_url) cleanPayload.cover_image_url = cleanUrl(item.cover_image_url);
+                        break;
+                    case 'group_ups':
+                        if (item.note) cleanPayload.note = cleanText(item.note);
+                        if (item.creator_full_name) cleanPayload.creator_full_name = cleanText(item.creator_full_name);
+                        if (item.start_time) cleanPayload.start_time = item.start_time;
+                        if (item.meeting_point) cleanPayload.meeting_point = cleanText(item.meeting_point);
+                        if (item.url) cleanPayload.url = cleanUrl(item.url);
+                        break;
+                }
+
+                // 检查并添加其他可能的URL字段
+                ['url', 'cover_image_url', 'video_url'].forEach(urlField => {
+                    if (item[urlField] && !cleanPayload[urlField]) {
+                        cleanPayload[urlField] = cleanUrl(item[urlField]);
+                    }
+                });
 
                 points.push({
                     id: uniqueId,
