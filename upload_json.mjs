@@ -1,4 +1,4 @@
-// upload_json.mjs - 包含URL字段的完整版本
+// updated_upload_json.mjs - 支持零停机更新的版本
 import fs from "fs";
 import path from "path";
 import dotenv from "dotenv";
@@ -13,6 +13,9 @@ const QDRANT_COLLECTION = process.env.QDRANT_COLLECTION;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
 const DATA_FILE = path.join(process.cwd(), "data", "pandahoho-export.json");
+
+// 定义别名名称（避免与现有集合冲突）
+const ALIAS_NAME = "pandahoho_search_alias";
 
 // 字符串转 UUID
 function stringToUUID(str) {
@@ -191,13 +194,55 @@ async function generateEmbedding(text, retries = 3) {
     }
 }
 
-// 安全的集合管理：使用临时集合避免服务中断
-async function safeCollectionUpdate() {
-    const tempCollectionName = `${QDRANT_COLLECTION}_temp_${Date.now()}`;
+// 检查当前集合状态（别名 vs 直接集合）
+async function checkCurrentCollectionStatus() {
+    try {
+        console.log(`🔍 检查当前集合状态: ${QDRANT_COLLECTION}`);
+        
+        // 1. 获取所有集合
+        const collectionsResponse = await axios.get(`${QDRANT_URL}/collections`, {
+            headers: { "api-key": QDRANT_API_KEY }
+        });
+        
+        const collections = collectionsResponse.data.result.collections;
+        
+        // 2. 检查是否为直接集合
+        const isDirectCollection = collections.some(col => col.name === QDRANT_COLLECTION);
+        
+        // 3. 检查别名状态
+        let aliasInfo = null;
+        try {
+            const aliasesResponse = await axios.get(`${QDRANT_URL}/collections/aliases`, {
+                headers: { "api-key": QDRANT_API_KEY }
+            });
+            
+            aliasInfo = aliasesResponse.data.result.aliases.find(
+                alias => alias.alias_name === QDRANT_COLLECTION
+            );
+        } catch (aliasError) {
+            console.warn("⚠️ 无法获取别名信息:", aliasError.message);
+        }
+        
+        return {
+            isDirectCollection,
+            aliasInfo,
+            collections,
+            useZeroDowntime: !!aliasInfo // 如果是别名，则使用零停机模式
+        };
+        
+    } catch (error) {
+        console.error("❌ 检查集合状态失败:", error.response?.data || error.message);
+        throw error;
+    }
+}
+
+// 零停机更新：创建临时集合并准备切换
+async function createTempCollectionForZeroDowntime() {
+    const tempCollectionName = `temp_${Date.now()}`;
     
     try {
-        // 1. 创建临时集合
-        console.log(`🔧 创建临时集合: ${tempCollectionName}`);
+        console.log(`🔧 创建临时集合用于零停机更新: ${tempCollectionName}`);
+        
         await axios.put(
             `${QDRANT_URL}/collections/${tempCollectionName}`,
             {
@@ -215,59 +260,100 @@ async function safeCollectionUpdate() {
     }
 }
 
-// 完成上传后的集合切换
-async function switchCollections(tempCollectionName) {
+// 传统更新：直接替换集合
+async function createDirectCollection() {
     try {
-        // 1. 删除旧的主集合（如果存在）
+        console.log(`🔧 使用传统模式，直接创建/替换集合: ${QDRANT_COLLECTION}`);
+        
+        // 删除现有集合（如果存在）
         try {
             await axios.delete(`${QDRANT_URL}/collections/${QDRANT_COLLECTION}`, {
                 headers: { "api-key": QDRANT_API_KEY },
             });
-            console.log(`🗑️ 已删除旧集合: ${QDRANT_COLLECTION}`);
+            console.log(`🗑️ 已删除现有集合: ${QDRANT_COLLECTION}`);
         } catch (err) {
             if (err.response?.status !== 404) {
-                console.warn("⚠️ 删除旧集合时出现问题:", err.response?.data || err.message);
+                console.warn("⚠️ 删除现有集合时出现问题:", err.response?.data || err.message);
             }
         }
         
-        // 2. 将临时集合重命名为主集合名
-        // 注意：Qdrant不支持直接重命名，我们需要使用别名机制
-        console.log(`🔄 设置集合别名...`);
-        
-        // 创建别名指向临时集合
+        // 创建新集合
         await axios.put(
-            `${QDRANT_URL}/collections/aliases`,
+            `${QDRANT_URL}/collections/${QDRANT_COLLECTION}`,
             {
-                actions: [
-                    {
-                        create_alias: {
-                            collection_name: tempCollectionName,
-                            alias_name: QDRANT_COLLECTION
-                        }
-                    }
-                ]
+                vectors: { size: 1536, distance: "Cosine" },
             },
             {
                 headers: { "api-key": QDRANT_API_KEY },
             }
         );
         
-        console.log(`✅ 集合切换完成！现在 ${QDRANT_COLLECTION} 指向新数据`);
+        return QDRANT_COLLECTION;
+    } catch (err) {
+        console.error("❌ 创建直接集合失败:", err.response?.data || err.message);
+        throw err;
+    }
+}
+
+// 零停机切换：更新别名指向
+async function switchToNewCollection(tempCollectionName, aliasInfo) {
+    try {
+        console.log(`🔄 零停机切换：更新别名指向新集合...`);
         
-        // 3. 稍后删除临时集合（可选）
-        // 注意：保留临时集合一段时间以防需要回滚
-        console.log(`ℹ️ 临时集合 ${tempCollectionName} 已保留，可稍后手动删除`);
+        const actions = [];
+        
+        // 如果已有别名，先删除
+        if (aliasInfo) {
+            actions.push({
+                delete_alias: {
+                    alias_name: QDRANT_COLLECTION
+                }
+            });
+        }
+        
+        // 创建新别名
+        actions.push({
+            create_alias: {
+                collection_name: tempCollectionName,
+                alias_name: QDRANT_COLLECTION
+            }
+        });
+        
+        await axios.put(
+            `${QDRANT_URL}/collections/aliases`,
+            { actions },
+            {
+                headers: { "api-key": QDRANT_API_KEY },
+            }
+        );
+        
+        console.log(`✅ 别名更新完成：${QDRANT_COLLECTION} -> ${tempCollectionName}`);
+        
+        // 删除旧集合（如果存在）
+        if (aliasInfo && aliasInfo.collection_name) {
+            try {
+                await axios.delete(`${QDRANT_URL}/collections/${aliasInfo.collection_name}`, {
+                    headers: { "api-key": QDRANT_API_KEY },
+                });
+                console.log(`🗑️ 已删除旧集合: ${aliasInfo.collection_name}`);
+            } catch (err) {
+                console.warn(`⚠️ 删除旧集合失败: ${err.message}`);
+            }
+        }
         
     } catch (err) {
-        console.error("❌ 集合切换失败:", err.response?.data || err.message);
-        // 如果切换失败，至少尝试删除临时集合
+        console.error("❌ 零停机切换失败:", err.response?.data || err.message);
+        
+        // 清理临时集合
         try {
             await axios.delete(`${QDRANT_URL}/collections/${tempCollectionName}`, {
                 headers: { "api-key": QDRANT_API_KEY },
             });
+            console.log("🧹 已清理临时集合");
         } catch (cleanupErr) {
             console.warn("⚠️ 清理临时集合失败:", cleanupErr.message);
         }
+        
         throw err;
     }
 }
@@ -306,7 +392,7 @@ async function uploadDataToCollection(points, collectionName) {
 // 主流程
 (async () => {
     try {
-        console.log("🚀 开始安全的数据更新流程...");
+        console.log("🚀 开始智能数据更新流程...");
         
         // 验证环境变量
         const requiredEnvs = ["QDRANT_URL", "QDRANT_API_KEY", "QDRANT_COLLECTION", "OPENAI_API_KEY"];
@@ -316,9 +402,26 @@ async function uploadDataToCollection(points, collectionName) {
             process.exit(1);
         }
         
-        // 1. 创建临时集合（不影响现有服务）
-        const tempCollectionName = await safeCollectionUpdate();
+        // 1. 检查当前集合状态，决定使用哪种更新模式
+        const collectionStatus = await checkCurrentCollectionStatus();
+        
+        let targetCollectionName;
+        
+        if (collectionStatus.useZeroDowntime) {
+            console.log("🎯 检测到别名模式，使用零停机更新...");
+            console.log(`📍 当前别名 '${QDRANT_COLLECTION}' 指向: ${collectionStatus.aliasInfo.collection_name}`);
+            
+            // 零停机模式：创建临时集合
+            targetCollectionName = await createTempCollectionForZeroDowntime();
+        } else {
+            console.log("🎯 检测到直接集合模式，使用传统更新...");
+            console.log("⚠️ 注意：此模式会导致短暂的服务中断");
+            
+            // 传统模式：直接替换集合
+            targetCollectionName = await createDirectCollection();
+        }
 
+        // 2. 准备数据
         const data = readAllArraysFromJson();
         const points = [];
 
@@ -401,16 +504,32 @@ async function uploadDataToCollection(points, collectionName) {
             process.exit(1);
         }
 
-        // 2. 上传数据到临时集合
-        await uploadDataToCollection(points, tempCollectionName);
+        // 3. 上传数据
+        await uploadDataToCollection(points, targetCollectionName);
         
-        // 3. 原子性切换：只有上传成功后才切换集合
-        await switchCollections(tempCollectionName);
+        // 4. 根据模式完成更新
+        if (collectionStatus.useZeroDowntime) {
+            console.log("🔄 执行零停机切换...");
+            await switchToNewCollection(targetCollectionName, collectionStatus.aliasInfo);
+            console.log("🎊 零停机更新完成！搜索服务无中断！");
+        } else {
+            console.log("🎊 传统更新完成！");
+            console.log("💡 建议：下次运行 zero_downtime_setup.mjs 启用零停机更新");
+        }
         
-        console.log("🎊 安全更新完成！搜索服务无中断！");
+        // 5. 显示最终状态
+        console.log("\n📊 更新摘要:");
+        console.log(`  - 处理记录: ${data.length}`);
+        console.log(`  - 成功上传: ${points.length}`);
+        console.log(`  - 更新模式: ${collectionStatus.useZeroDowntime ? '零停机' : '传统'}`);
+        console.log(`  - 目标集合: ${targetCollectionName}`);
+        if (collectionStatus.useZeroDowntime) {
+            console.log(`  - 访问别名: ${QDRANT_COLLECTION}`);
+        }
         
     } catch (error) {
         console.error("💥 程序执行失败:", error.message);
+        console.error("堆栈信息:", error.stack);
         process.exit(1);
     }
 })();

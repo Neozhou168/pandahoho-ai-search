@@ -88,7 +88,91 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
-// 测试Qdrant连接
+// 改进的集合检查函数 - 支持别名和直接集合
+async function checkCollectionAvailability(collectionName) {
+  try {
+    console.log(`🔍 检查集合可用性: ${collectionName}`);
+    
+    // 1. 尝试直接访问集合
+    try {
+      const collectionInfo = await qdrant.getCollection(collectionName);
+      console.log(`✅ 直接集合访问成功: ${collectionName}`);
+      return {
+        available: true,
+        type: 'direct',
+        name: collectionName,
+        info: collectionInfo
+      };
+    } catch (directError) {
+      if (!directError.message.includes('404') && !directError.message.includes('Not found')) {
+        throw directError; // 非404错误，重新抛出
+      }
+      console.log(`ℹ️ 直接集合不存在，检查别名...`);
+    }
+    
+    // 2. 检查是否存在作为别名，通过搜索测试
+    try {
+      await qdrant.search(collectionName, {
+        vector: new Array(1536).fill(0), // 创建零向量进行测试
+        limit: 1,
+        with_payload: false,
+        with_vector: false
+      });
+      
+      console.log(`✅ 别名访问成功: ${collectionName}`);
+      return {
+        available: true,
+        type: 'alias',
+        name: collectionName,
+        info: null
+      };
+    } catch (aliasError) {
+      console.log(`❌ 别名访问也失败: ${aliasError.message}`);
+    }
+    
+    // 3. 列出可用的集合供调试
+    try {
+      const collections = await qdrant.getCollections();
+      console.log("🔍 可用的集合:");
+      collections.collections.forEach(col => {
+        console.log(`  - ${col.name} (状态: ${col.status})`);
+      });
+      
+      // 检查是否有相似名称的集合
+      const similarCollections = collections.collections.filter(col => 
+        col.name.includes(collectionName.split('_')[0]) || 
+        col.name.includes('pandahoho')
+      );
+      
+      if (similarCollections.length > 0) {
+        console.log("🔍 可能相关的集合:");
+        similarCollections.forEach(col => {
+          console.log(`  - ${col.name}`);
+        });
+      }
+    } catch (listError) {
+      console.warn("⚠️ 无法列出集合:", listError.message);
+    }
+    
+    return {
+      available: false,
+      type: 'none',
+      name: collectionName,
+      info: null
+    };
+    
+  } catch (error) {
+    console.error("❌ 检查集合时出错:", error.message);
+    return {
+      available: false,
+      type: 'error',
+      name: collectionName,
+      error: error.message
+    };
+  }
+}
+
+// 测试Qdrant连接的改进版本
 async function testQdrantConnection() {
   try {
     console.log("🧪 Testing Qdrant connection...");
@@ -97,32 +181,36 @@ async function testQdrantConnection() {
     const collections = await qdrant.getCollections();
     console.log("✅ Qdrant connection successful");
     
-    // 检查目标集合是否存在
+    // 检查目标集合/别名的可用性
     const targetCollection = process.env.QDRANT_COLLECTION;
-    const collectionExists = collections.collections.some(
-      col => col.name === targetCollection
-    );
+    const collectionStatus = await checkCollectionAvailability(targetCollection);
     
-    if (collectionExists) {
-      console.log(`✅ Collection '${targetCollection}' exists`);
+    if (collectionStatus.available) {
+      console.log(`✅ Collection '${targetCollection}' 可用 (类型: ${collectionStatus.type})`);
       
-      // 获取集合详细信息
-      try {
-        const collectionInfo = await qdrant.getCollection(targetCollection);
+      if (collectionStatus.type === 'direct' && collectionStatus.info) {
         console.log(`📊 Collection info:`, {
-          name: collectionInfo.name,
-          status: collectionInfo.status,
-          points_count: collectionInfo.points_count || 'unknown',
-          vectors_count: collectionInfo.vectors_count || 'unknown'
+          name: collectionStatus.info.name,
+          status: collectionStatus.info.status,
+          points_count: collectionStatus.info.points_count || 'unknown',
+          vectors_count: collectionStatus.info.vectors_count || 'unknown'
         });
-        return true;
-      } catch (infoError) {
-        console.warn("⚠️ Could not get collection details:", infoError.message);
-        return true; // 集合存在但无法获取详情，仍然可以继续
+      } else if (collectionStatus.type === 'alias') {
+        console.log(`🏷️ 使用别名模式，支持零停机更新`);
       }
+      
+      return true;
     } else {
-      console.error(`❌ Collection '${targetCollection}' not found`);
-      console.log("Available collections:", collections.collections.map(c => c.name));
+      console.error(`❌ Collection '${targetCollection}' 不可用 (类型: ${collectionStatus.type})`);
+      if (collectionStatus.error) {
+        console.error("错误详情:", collectionStatus.error);
+      }
+      
+      console.log("💡 建议操作:");
+      console.log("1. 运行 zero_downtime_setup.mjs 设置别名机制");
+      console.log("2. 或运行 improved_upload_json.mjs 重新创建集合");
+      console.log("3. 检查环境变量 QDRANT_COLLECTION 的值");
+      
       return false;
     }
   } catch (error) {
@@ -132,26 +220,41 @@ async function testQdrantConnection() {
   }
 }
 
-// 健康检查路由
+// 健康检查路由 - 增加更多诊断信息
 app.get('/', async (req, res) => {
+  const startTime = Date.now();
+  
+  // 检查集合状态
+  let collectionStatus = null;
+  try {
+    collectionStatus = await checkCollectionAvailability(process.env.QDRANT_COLLECTION);
+  } catch (err) {
+    console.error("健康检查时集合检查失败:", err.message);
+  }
+  
   const healthStatus = {
-    status: 'ok',
+    status: collectionStatus?.available ? 'ok' : 'warning',
     message: 'Pandahoho AI Search API running',
     timestamp: new Date().toISOString(),
+    elapsed_ms: Date.now() - startTime,
     environment: {
       hasQdrantUrl: !!process.env.QDRANT_URL,
       hasQdrantApiKey: !!process.env.QDRANT_API_KEY,
       hasQdrantCollection: !!process.env.QDRANT_COLLECTION,
       hasOpenaiApiKey: !!process.env.OPENAI_API_KEY,
       collection: process.env.QDRANT_COLLECTION
-    }
+    },
+    collection_status: collectionStatus
   };
   
   console.log("🩺 Health check requested");
-  res.json(healthStatus);
+  
+  // 根据集合状态设置响应码
+  const statusCode = collectionStatus?.available ? 200 : 503;
+  res.status(statusCode).json(healthStatus);
 });
 
-// 搜索 API
+// 搜索 API - 增加更好的错误处理
 app.post('/search', async (req, res) => {
   const startTime = Date.now();
   console.log("🚀 [1] 收到 /search 请求, body =", req.body);
@@ -183,7 +286,7 @@ app.post('/search', async (req, res) => {
       });
     }
 
-    // Step 2: Qdrant 搜索
+    // Step 2: Qdrant 搜索 - 增加更详细的错误处理
     console.log("🌐 [4] 正在连接 Qdrant 并发送搜索请求...");
     
     let searchResult;
@@ -200,20 +303,39 @@ app.post('/search', async (req, res) => {
       console.log(`✅ [4] Qdrant 返回原始结果数量 = ${searchResult.length}`);
     } catch (qdrantError) {
       console.error("❌ [4] Qdrant搜索失败:", qdrantError.message);
+      
+      // 提供更具体的错误信息
+      let errorMessage = `Qdrant search failed: ${qdrantError.message}`;
+      if (qdrantError.message.includes('404') || qdrantError.message.includes('Not found')) {
+        errorMessage += `. Collection '${process.env.QDRANT_COLLECTION}' may not exist or be accessible.`;
+      }
+      
       return res.status(500).json({
         status: 'error',
-        message: `Qdrant search failed: ${qdrantError.message}`,
-        elapsed_ms: Date.now() - startTime
+        message: errorMessage,
+        elapsed_ms: Date.now() - startTime,
+        suggestion: "Try running zero_downtime_setup.mjs or check your collection configuration"
       });
     }
 
-    // Step 3: 过滤推广信息
+    // Step 3: 过滤推广信息 - 增加更多过滤规则
     const filteredResults = searchResult.filter(result => {
       const payload = result.payload || {};
       const description = payload.description || '';
+      const title = payload.title || '';
       
       // 过滤掉包含推广文案的结果
-      const isPromotion = description.includes('Your guide to the great outdoors');
+      const promotionKeywords = [
+        'Your guide to the great outdoors',
+        'advertisement',
+        'sponsored',
+        'promotional'
+      ];
+      
+      const isPromotion = promotionKeywords.some(keyword => 
+        description.toLowerCase().includes(keyword.toLowerCase()) ||
+        title.toLowerCase().includes(keyword.toLowerCase())
+      );
       
       if (isPromotion) {
         console.log(`🚫 过滤掉推广信息: ${payload.title}`);
@@ -232,7 +354,9 @@ app.post('/search', async (req, res) => {
       status: 'ok',
       elapsed_ms: elapsed,
       results: filteredResults,
-      query: query
+      query: query,
+      total_found: searchResult.length,
+      filtered_count: filteredResults.length
     });
 
   } catch (err) {
@@ -250,6 +374,26 @@ app.post('/search', async (req, res) => {
   }
 });
 
+// 新增：集合状态检查端点
+app.get('/collection-status', async (req, res) => {
+  try {
+    const collectionStatus = await checkCollectionAvailability(process.env.QDRANT_COLLECTION);
+    res.json({
+      status: 'ok',
+      collection_name: process.env.QDRANT_COLLECTION,
+      collection_status: collectionStatus,
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    res.status(500).json({
+      status: 'error',
+      message: err.message,
+      collection_name: process.env.QDRANT_COLLECTION,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
 // 启动服务器
 app.listen(PORT, async () => {
   console.log(`🚀 AI Search API running at http://localhost:${PORT}`);
@@ -262,8 +406,10 @@ app.listen(PORT, async () => {
   } else {
     console.log("⚠️ Qdrant connection issues detected - searches may fail");
     console.log("💡 Please check your QDRANT_URL, QDRANT_API_KEY, and QDRANT_COLLECTION environment variables");
+    console.log("🔧 Run 'node zero_downtime_setup.mjs' to set up zero-downtime updates");
   }
   
   console.log("🔗 Health check available at: /");
   console.log("🔍 Search endpoint available at: POST /search");
+  console.log("📊 Collection status available at: GET /collection-status");
 });
