@@ -23,8 +23,6 @@ const DATA_FILE = path.join(process.cwd(), "data", "pandahoho-export.json");
 const COLLECTION_A = "pandahoho_knowledge";
 const COLLECTION_B = "pandahoho_knowledge_temp_1755596302600";
 
-// [保留所有之前的辅助函数：stringToUUID, cleanText, cleanUrl, generateTextForEmbedding, readAllArraysFromJson, generateEmbedding...]
-
 // 字符串转 UUID
 function stringToUUID(str) {
     const hash = crypto.createHash("sha1").update(str).digest("hex");
@@ -249,7 +247,7 @@ async function waitForServiceRestart(targetCollection, maxWaitTime = 300000) { /
     return false;
 }
 
-// 检查集合状态的函数（与之前相同）
+// 检查集合状态的函数
 async function checkCollectionStatus() {
     try {
         console.log("🔍 检查现有集合状态...");
@@ -292,7 +290,7 @@ async function checkCollectionStatus() {
     }
 }
 
-// 准备目标集合的函数（与之前相同）
+// 准备目标集合的函数
 async function prepareTargetCollection(targetCollection) {
     try {
         console.log(`🔧 准备目标集合: ${targetCollection}`);
@@ -323,7 +321,7 @@ async function prepareTargetCollection(targetCollection) {
     }
 }
 
-// 上传数据函数（与之前相同）
+// 上传数据函数
 async function uploadDataToCollection(points, collectionName) {
     const batchSize = 50;
     const totalBatches = Math.ceil(points.length / batchSize);
@@ -412,23 +410,26 @@ async function uploadDataToCollection(points, collectionName) {
                     type: item.type
                 };
 
-                // 根据类型添加特定字段
+                // 根据类型添加特定字段（修复：添加 google_maps_direct_url 处理）
                 switch (item.type) {
                     case 'routes':
                         if (item.travel_mode) cleanPayload.travel_mode = cleanText(item.travel_mode);
                         if (item.duration) cleanPayload.duration = cleanText(item.duration);
                         if (item.url) cleanPayload.url = cleanUrl(item.url);
+                        if (item.google_maps_direct_url) cleanPayload.google_maps_direct_url = cleanUrl(item.google_maps_direct_url);
                         break;
                     case 'venues':
                         if (item.audience) cleanPayload.audience = Array.isArray(item.audience) ? item.audience.map(cleanText) : [];
                         if (item.highlights) cleanPayload.highlights = Array.isArray(item.highlights) ? item.highlights.map(cleanText) : [];
                         if (item.url) cleanPayload.url = cleanUrl(item.url);
+                        if (item.google_maps_direct_url) cleanPayload.google_maps_direct_url = cleanUrl(item.google_maps_direct_url);
                         break;
                     case 'curations':
                         if (item.travel_type) cleanPayload.travel_type = cleanText(item.travel_type);
                         if (item.best_season) cleanPayload.best_season = cleanText(item.best_season);
                         if (item.url) cleanPayload.url = cleanUrl(item.url);
                         if (item.cover_image_url) cleanPayload.cover_image_url = cleanUrl(item.cover_image_url);
+                        if (item.google_maps_direct_url) cleanPayload.google_maps_direct_url = cleanUrl(item.google_maps_direct_url);
                         break;
                     case 'group_ups':
                         if (item.note) cleanPayload.note = cleanText(item.note);
@@ -436,10 +437,12 @@ async function uploadDataToCollection(points, collectionName) {
                         if (item.start_time) cleanPayload.start_time = item.start_time;
                         if (item.meeting_point) cleanPayload.meeting_point = cleanText(item.meeting_point);
                         if (item.url) cleanPayload.url = cleanUrl(item.url);
+                        if (item.google_maps_direct_url) cleanPayload.google_maps_direct_url = cleanUrl(item.google_maps_direct_url);
                         break;
                 }
 
-                ['url', 'cover_image_url', 'video_url'].forEach(urlField => {
+                // 通用 URL 字段处理（修复：添加 google_maps_direct_url）
+                ['url', 'cover_image_url', 'video_url', 'google_maps_direct_url'].forEach(urlField => {
                     if (item[urlField] && !cleanPayload[urlField]) {
                         cleanPayload[urlField] = cleanUrl(item[urlField]);
                     }
