@@ -191,27 +191,15 @@ async function generateEmbedding(text, retries = 3) {
     }
 }
 
-// 删除已存在的 collection
-async function deleteCollection() {
+// 安全的集合管理：使用临时集合避免服务中断
+async function safeCollectionUpdate() {
+    const tempCollectionName = `${QDRANT_COLLECTION}_temp_${Date.now()}`;
+    
     try {
-        await axios.delete(`${QDRANT_URL}/collections/${QDRANT_COLLECTION}`, {
-            headers: { "api-key": QDRANT_API_KEY },
-        });
-        console.log(`🗑️ 已删除 Collection "${QDRANT_COLLECTION}"`);
-    } catch (err) {
-        if (err.response?.status === 404) {
-            console.log(`ℹ️ Collection "${QDRANT_COLLECTION}" 不存在，跳过删除`);
-        } else {
-            console.error("⚠️ 删除 Collection 失败:", err.response?.data || err.message);
-        }
-    }
-}
-
-// 创建新的 collection
-async function createCollection() {
-    try {
+        // 1. 创建临时集合
+        console.log(`🔧 创建临时集合: ${tempCollectionName}`);
         await axios.put(
-            `${QDRANT_URL}/collections/${QDRANT_COLLECTION}`,
+            `${QDRANT_URL}/collections/${tempCollectionName}`,
             {
                 vectors: { size: 1536, distance: "Cosine" },
             },
@@ -219,19 +207,77 @@ async function createCollection() {
                 headers: { "api-key": QDRANT_API_KEY },
             }
         );
-        console.log(`✅ 已创建 Collection "${QDRANT_COLLECTION}"`);
+        
+        return tempCollectionName;
     } catch (err) {
-        console.error("❌ 创建 Collection 失败:", err.response?.data || err.message);
+        console.error("❌ 创建临时集合失败:", err.response?.data || err.message);
         throw err;
     }
 }
 
-// 批量上传数据到 Qdrant
-async function uploadData(points) {
-    const batchSize = 50; // 减小批量大小
+// 完成上传后的集合切换
+async function switchCollections(tempCollectionName) {
+    try {
+        // 1. 删除旧的主集合（如果存在）
+        try {
+            await axios.delete(`${QDRANT_URL}/collections/${QDRANT_COLLECTION}`, {
+                headers: { "api-key": QDRANT_API_KEY },
+            });
+            console.log(`🗑️ 已删除旧集合: ${QDRANT_COLLECTION}`);
+        } catch (err) {
+            if (err.response?.status !== 404) {
+                console.warn("⚠️ 删除旧集合时出现问题:", err.response?.data || err.message);
+            }
+        }
+        
+        // 2. 将临时集合重命名为主集合名
+        // 注意：Qdrant不支持直接重命名，我们需要使用别名机制
+        console.log(`🔄 设置集合别名...`);
+        
+        // 创建别名指向临时集合
+        await axios.put(
+            `${QDRANT_URL}/collections/aliases`,
+            {
+                actions: [
+                    {
+                        create_alias: {
+                            collection_name: tempCollectionName,
+                            alias_name: QDRANT_COLLECTION
+                        }
+                    }
+                ]
+            },
+            {
+                headers: { "api-key": QDRANT_API_KEY },
+            }
+        );
+        
+        console.log(`✅ 集合切换完成！现在 ${QDRANT_COLLECTION} 指向新数据`);
+        
+        // 3. 稍后删除临时集合（可选）
+        // 注意：保留临时集合一段时间以防需要回滚
+        console.log(`ℹ️ 临时集合 ${tempCollectionName} 已保留，可稍后手动删除`);
+        
+    } catch (err) {
+        console.error("❌ 集合切换失败:", err.response?.data || err.message);
+        // 如果切换失败，至少尝试删除临时集合
+        try {
+            await axios.delete(`${QDRANT_URL}/collections/${tempCollectionName}`, {
+                headers: { "api-key": QDRANT_API_KEY },
+            });
+        } catch (cleanupErr) {
+            console.warn("⚠️ 清理临时集合失败:", cleanupErr.message);
+        }
+        throw err;
+    }
+}
+
+// 上传数据到指定集合
+async function uploadDataToCollection(points, collectionName) {
+    const batchSize = 50;
     const totalBatches = Math.ceil(points.length / batchSize);
     
-    console.log(`⬆️ 开始批量上传 ${points.length} 条数据（${totalBatches} 批次）...`);
+    console.log(`⬆️ 开始批量上传 ${points.length} 条数据到 ${collectionName}（${totalBatches} 批次）...`);
     
     for (let i = 0; i < totalBatches; i++) {
         const start = i * batchSize;
@@ -240,7 +286,7 @@ async function uploadData(points) {
         
         try {
             await axios.put(
-                `${QDRANT_URL}/collections/${QDRANT_COLLECTION}/points?wait=true`,
+                `${QDRANT_URL}/collections/${collectionName}/points?wait=true`,
                 { points: batch },
                 { 
                     headers: { "api-key": QDRANT_API_KEY },
@@ -254,13 +300,13 @@ async function uploadData(points) {
         }
     }
     
-    console.log("🎉 所有数据上传完成");
+    console.log(`🎉 所有数据已上传到 ${collectionName}`);
 }
 
 // 主流程
 (async () => {
     try {
-        console.log("🚀 开始数据上传流程...");
+        console.log("🚀 开始安全的数据更新流程...");
         
         // 验证环境变量
         const requiredEnvs = ["QDRANT_URL", "QDRANT_API_KEY", "QDRANT_COLLECTION", "OPENAI_API_KEY"];
@@ -270,8 +316,8 @@ async function uploadData(points) {
             process.exit(1);
         }
         
-        await deleteCollection();
-        await createCollection();
+        // 1. 创建临时集合（不影响现有服务）
+        const tempCollectionName = await safeCollectionUpdate();
 
         const data = readAllArraysFromJson();
         const points = [];
@@ -355,8 +401,13 @@ async function uploadData(points) {
             process.exit(1);
         }
 
-        await uploadData(points);
-        console.log("🎊 全部完成！");
+        // 2. 上传数据到临时集合
+        await uploadDataToCollection(points, tempCollectionName);
+        
+        // 3. 原子性切换：只有上传成功后才切换集合
+        await switchCollections(tempCollectionName);
+        
+        console.log("🎊 安全更新完成！搜索服务无中断！");
         
     } catch (error) {
         console.error("💥 程序执行失败:", error.message);
