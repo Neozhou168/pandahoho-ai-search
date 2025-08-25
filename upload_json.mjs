@@ -45,6 +45,7 @@ function cleanUrl(url) {
     return url.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '').trim();
 }
 
+// 修改：添加 survival_guides 支持
 function generateTextForEmbedding(item, type) {
     let parts = [];
     switch (type) {
@@ -62,6 +63,13 @@ function generateTextForEmbedding(item, type) {
         case "group_ups":
             parts = [item.title, item.description, item.note, item.creator_full_name];
             break;
+        case "survival_guides": // 新增 survival_guides 支持
+            parts = [item.title, item.description, item.country];
+            // survival guides 通常包含实用信息，所以描述权重更高
+            if (item.description) {
+                parts.push(item.description); // 重复添加描述以增加权重
+            }
+            break;
         default:
             parts = [item.title, item.description];
     }
@@ -78,7 +86,8 @@ function readAllArraysFromJson() {
     const raw = fs.readFileSync(DATA_FILE, "utf-8");
     const jsonData = JSON.parse(raw);
     let combinedData = [];
-    const expectedFields = ["routes", "venues", "curations", "group_ups"];
+    // 修改：添加 survival_guides 到预期字段列表
+    const expectedFields = ["routes", "venues", "curations", "group_ups", "survival_guides"];
     if (Array.isArray(jsonData)) {
         combinedData = jsonData.map(item => ({ ...item, type: "default" }));
     } else {
@@ -410,7 +419,7 @@ async function uploadDataToCollection(points, collectionName) {
                     type: item.type
                 };
 
-                // 根据类型添加特定字段（修复：添加 google_maps_direct_url 处理）
+                // 根据类型添加特定字段（修改：添加 survival_guides 处理）
                 switch (item.type) {
                     case 'routes':
                         if (item.travel_mode) cleanPayload.travel_mode = cleanText(item.travel_mode);
@@ -439,10 +448,16 @@ async function uploadDataToCollection(points, collectionName) {
                         if (item.url) cleanPayload.url = cleanUrl(item.url);
                         if (item.google_maps_direct_url) cleanPayload.google_maps_direct_url = cleanUrl(item.google_maps_direct_url);
                         break;
+                    case 'survival_guides': // 新增 survival_guides 处理
+                        if (item.cover_image_url) cleanPayload.cover_image_url = cleanUrl(item.cover_image_url);
+                        if (item.related_video_url) cleanPayload.related_video_url = cleanUrl(item.related_video_url);
+                        if (item.url) cleanPayload.url = cleanUrl(item.url);
+                        if (item.google_maps_direct_url) cleanPayload.google_maps_direct_url = cleanUrl(item.google_maps_direct_url);
+                        break;
                 }
 
-                // 通用 URL 字段处理（修复：添加 google_maps_direct_url）
-                ['url', 'cover_image_url', 'video_url', 'google_maps_direct_url'].forEach(urlField => {
+                // 通用 URL 字段处理（修改：添加 related_video_url）
+                ['url', 'cover_image_url', 'video_url', 'related_video_url', 'google_maps_direct_url'].forEach(urlField => {
                     if (item[urlField] && !cleanPayload[urlField]) {
                         cleanPayload[urlField] = cleanUrl(item[urlField]);
                     }
